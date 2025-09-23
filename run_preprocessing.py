@@ -1,0 +1,245 @@
+# !/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# @Time : 2024/07/20 23:06
+# @Author : caisj
+from my_logging import logger
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+
+import config
+from config import Storage_Traffic_Flow_Path_Name, Storage_Taxi_Flow_Path_Name, Storage_Taxi_Speed_Path_Name, \
+    Storage_CD_Taxi_Flow_Path_Name
+from preprocess.preprocessing_data import SensorsTrafficConversion, TaxiTrafficConversion, ChengDuTaxiTrafficConversion
+import warnings
+from utils.FastText import Pretrain_FastText, UTSL_Fine_Turning
+from utils.get_graph import get_CD_trajectory, get_QD_trajectory
+from utils.tools import data_smooth, drop_small_flow
+warnings.filterwarnings("ignore")
+
+
+def storage_traffic_flow_speed(path_and_name):
+    # 统计交通流，存入data文件夹:卡口流量没有速度
+    STC = SensorsTrafficConversion()
+    all_traffic_flow = STC.get_all_traffic_flow()
+    all_traffic_flow.to_csv(path_and_name, index=False)
+
+
+def storage_taxi_flow_speed(path_and_name_flow, path_and_name_speed):
+    # 统计出租车流量和平均速度
+    TTC = TaxiTrafficConversion()
+    all_taxi_flow, all_taxi_speed = TTC.get_all_taxi_flow_speed()
+    # 保存数据
+    all_taxi_flow.to_csv(path_and_name_flow, index=False)
+    all_taxi_speed.to_csv(path_and_name_speed, index=False)
+
+
+def storage_CD_taxi_flow(path_and_name):
+    # 统计成都交通流，存入data文件夹
+    CDTTC = ChengDuTaxiTrafficConversion()
+    all_traffic_flow = CDTTC.get_all_traffic_flow()
+    all_traffic_flow.to_csv(path_and_name, index=False)
+
+
+def flow_process(data, flow_threshold, step, city):
+    '''
+    流量序列处理
+    :param data: dataframe，包含各个卡口的流量
+    :param flow_threshold: 流量最小阈值，卡口平均流量低于此值将被舍弃
+    :param step: 流量序列的周期
+    :param city: str， QD or CD
+    :return: dataframe
+    '''
+    # 卡尔曼数据平滑
+    for column_name in tqdm(data.columns.tolist(), desc='卡尔曼数据平滑'):
+        if column_name.isdigit():
+            data[column_name] = data_smooth(data[column_name], step)
+    # 删除平均流量小于指定值的卡口
+    data = drop_small_flow(data, flow_threshold)
+    if city == 'QD':
+        # 删除无效卡口：只筛选QD_nodes.xlsx中有经纬度的卡口
+        df_location = pd.read_excel(r'./data/node_location/QD_nodes.xlsx')
+        location_map = {}
+        for index, row in df_location.iterrows():
+            location_map[str(row['crossroadID'])] = [row['lng'], row['lat']]
+        for name in data.columns.tolist():
+            if name.isdigit() and name not in location_map:
+                del data[name]
+    return data
+
+
+def time_embedding():
+    '''
+    得到时间的嵌入表达
+    :return: [T,N,C]
+    '''
+    from datetime import datetime, timedelta
+
+    node_num = 134
+
+    time_embedding = []
+    for i in range(1, 15):
+        # 起始时间
+        start_date = datetime(2019, 8, i, 7, 5)  # 从2019年8月1日7点开始
+        end_date = datetime(2019, 8, i, 19, 0)  # 到2019年8月19日19点结束
+
+        # 定义时间间隔
+        interval = timedelta(minutes=5)
+
+        # 生成时间间隔数组
+        time_intervals = []
+        current_date = start_date
+        while current_date <= end_date:
+            time_intervals.append(current_date)
+            current_date += interval
+
+        # 提取时间特征、归一化
+        # day = [i.day / 30.0 - 0.5 for i in time_intervals]
+        hour = [i.hour / 23.0 - 0.5 for i in time_intervals]
+        dayofweek = [i.weekday / 6.0 - 0.5 for i in time_intervals]
+
+        # day = np.array([day for _ in range(node_num)]).T # [144,N]
+        hour = np.array([hour for _ in range(node_num)]).T # [144,N]
+        dayofweek = np.array([dayofweek for _ in range(node_num)]).T # [144,N]
+        embedding = np.stack((hour, dayofweek), axis=-1) # [144,N,2]
+
+        # 滑窗采样
+        for k in range(embedding.shape[0] - 12 - 12 + 1):
+            time_slice = embedding[k:k+24, :, :]
+            time_embedding.append(time_slice)
+    time_embedding = np.array(time_embedding)
+    return time_embedding
+
+
+def save_QD_traj_emb(pretrain_model_save_path, emb_size):
+    city = 'QD'
+    ##### 预训练和增量微调数据获取
+    logger.info('Calculating QD embedding...')
+    # get_QD_trajectory(get_all_traj=True)
+    get_QD_trajectory(get_all_traj=False)
+    
+    ##### 预训练UTSL
+    logger.info('Pretrain QD UTSL...')
+    Pretrain_FastText(traj_path=config.Pretrain_save_path_QD, model_save_path=pretrain_model_save_path, emb_size=emb_size, city=city)
+    
+    ##### 增量微调
+    logger.info('Fine Turning QD UTSL...')
+    all_emb = UTSL_Fine_Turning(pretrained_model_path=pretrain_model_save_path, traj_path=config.FineTurning_save_path_QD, emb_size=emb_size, city=city)
+    np.save('data/traj_emb/QD_emb.npy', all_emb)
+
+
+def save_CD_traj_emb(pretrain_model_save_path, emb_size, get_all_traj):
+    city = 'CD'
+    ##### 预训练和增量微调数据获取
+    logger.info('Calculating CD embedding...')
+    get_CD_trajectory(get_all_traj)
+    
+    ##### 预训练UTSL
+    logger.info('Pretrain CD UTSL...')
+    Pretrain_FastText(traj_path=config.Pretrain_save_path, model_save_path=pretrain_model_save_path, emb_size=emb_size, city=city)
+    
+    ##### 增量微调
+    logger.info('Fine Turning CD UTSL...')
+    all_emb = UTSL_Fine_Turning(pretrained_model_path=pretrain_model_save_path, traj_path=config.FineTurning_save_path, emb_size=emb_size, city=city)
+    np.save('data/traj_emb/CD_emb.npy', all_emb)
+    
+def sliding_window_sampling(data, window_size=24, samples_per_day=144):
+    total_samples, num_features = data.shape
+    total_days = total_samples // samples_per_day
+    windows_per_day = samples_per_day - window_size + 1
+    total_windows = total_days * windows_per_day
+    
+    windowed_data = np.zeros((total_windows, window_size, num_features))
+    
+    window_idx = 0
+    for day in range(total_days):
+        day_start = day * samples_per_day
+        day_end = (day + 1) * samples_per_day
+        day_data = data[day_start:day_end]
+        
+        for i in range(windows_per_day):
+            window_data = day_data[i:i + window_size]
+            windowed_data[window_idx] = window_data
+            window_idx += 1
+    
+    return windowed_data
+
+
+if __name__ == "__main__":
+    # ----------------  step 1：统计青岛市交通量卡口流量 -------------
+    # # 转换卡口交通流：8月和9月
+    storage_traffic_flow_speed(path_and_name=Storage_Traffic_Flow_Path_Name)
+
+    #----------------  step 2：统计成都市地铁口出租车流量 -------------
+    # 转换成都出租车数据
+    storage_CD_taxi_flow(path_and_name=Storage_CD_Taxi_Flow_Path_Name)
+
+    #----------------  step 3：流量处理（时序降噪、平滑、卡口点过滤） -------------
+    logger.info('青岛 流量处理（时序降噪、平滑、卡口点过滤）。。。')
+    # 青岛流量转换
+    df_flow_QD = pd.read_csv(r'data/train_flow/QD_traffic_flow.csv')
+    df_flow_QD = df_flow_QD[df_flow_QD['month_day'] < '09-01'].copy() # 9月数据有误，删除
+    df_flow_QD = flow_process(df_flow_QD, config.QD_Flow_Threshold, 144, city='QD')
+    df_flow_QD.to_csv(r'data/train_flow/QD_flow.csv', index=False)
+    # split train/val/test
+    features = df_flow_QD.iloc[:, 1:].values
+    train_data = features[:14*144]
+    val_data = features[14*144:16*144]
+    test_data = features[16*144:]
+    train_windowed = sliding_window_sampling(train_data)
+    val_windowed = sliding_window_sampling(val_data)
+    test_windowed = sliding_window_sampling(test_data)
+    np.save(r'data/flow/QD/train_flow.npy', train_windowed)
+    np.save(r'data/flow/QD/val_flow.npy', val_windowed)
+    np.save(r'data/flow/QD/test_flow.npy', test_windowed)
+
+    # logger.info('成都 流量处理（时序降噪、平滑、卡口点过滤）。。。')
+    # 成都流量转换
+    df_flow_CD = pd.read_csv(r'data/train_flow/CD_taxi_flow.csv')
+    df_flow_CD = flow_process(df_flow_CD, config.CD_Flow_Threshold, 216, city='CD')
+    df_flow_CD.to_csv(r'data/train_flow/CD_flow.csv', index=False)
+    
+    #----------------  step 4：计算轨迹的嵌入表达  ----------------------
+    ### CD
+    pretrain_model_save_path = 'model/Pretrain'
+    emb_size = 100
+    get_all_traj = True  # 是否获取预训练数据
+    save_CD_traj_emb(pretrain_model_save_path, emb_size, get_all_traj)
+    
+    # CD
+    traj = np.load(r'data/traj_emb/CD_emb.npy')
+    traj = traj.reshape(-1, 149, 100)
+    train = traj[:2509, :, :]
+    val = traj[2509:2509+386, :, :]
+    test = traj[2509+386:, :, :]
+    np.save(r'data/flow/CD/train_traj.npy', train)
+    np.save(r'data/flow/CD/val_traj.npy', val)
+    np.save(r'data/flow/CD/test_traj.npy', test)
+    
+    
+    ### QD
+    pretrain_model_save_path = 'model/Pretrain'
+    emb_size = 100
+    save_QD_traj_emb(pretrain_model_save_path, emb_size)
+    
+    traj = np.load(r'data/traj_emb/QD_emb.npy')
+    traj = traj.reshape(-1, 134, 100)
+    train = traj[:1694, :, :]
+    val = traj[1694:1694+242, :, :]
+    test = traj[1694+242:, :, :]
+    np.save(r'data/flow/QD/train_traj.npy', train)
+    np.save(r'data/flow/QD/val_traj.npy', val)
+    np.save(r'data/flow/QD/test_traj.npy', test)
+
+    #----------------  step 5：计算轨迹的嵌入表达  ----------------------
+
+    logger.info('计算Qingdao的轨迹嵌入表达')
+    # 计算成都邻接图
+    key = config.key
+    df_flow = pd.read_csv(r'./data/QD_flow_use.csv')
+    save_QD_traj_emb(df_flow, key)
+
+    logger.info('Chengdu trajectory embedding...')
+    # 成都轨迹处理
+    save_CD_traj_emb()
+
