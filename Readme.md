@@ -57,7 +57,8 @@ python run_main.py
 
 For quick start, preprocessed intermediate variables are available for download:
 
-**Download Link:** https://pan.baidu.com/s/1B-fOfhN6DA2V7KqNAKF8mA  
-**Access Code:** 2u13
+**Download Link:** [https://pan.baidu.com/s/1B-fOfhN6DA2V7KqNAKF8mA](https://pan.baidu.com/s/1Mtf1o2HQ7Gx5v61wT2EQEg?pwd=qsmj)  
+**Access Code:** qsmj
 
 Extract the downloaded `data` folder to the project root directory. This allows you to skip the preprocessing steps and directly run `python run_main.py` for model training and testing.
+
