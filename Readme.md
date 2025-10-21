@@ -53,12 +53,4 @@ python run_main.py
 - Training
 - Output: Trained model and prediction results
 
-## 📦 Preprocessed Data (Optional)
-
-For quick start, preprocessed intermediate variables are available for download:
-
-**Download Link:** [https://pan.baidu.com/s/1B-fOfhN6DA2V7KqNAKF8mA](https://pan.baidu.com/s/1Mtf1o2HQ7Gx5v61wT2EQEg?pwd=qsmj)  
-**Access Code:** qsmj
-
-Extract the downloaded `data` folder to the project root directory. This allows you to skip the preprocessing steps and directly run `python run_main.py` for model training and testing.
 
