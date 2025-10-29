@@ -53,4 +53,16 @@ python run_main.py
 - Training
 - Output: Trained model and prediction results
 
+## Cite
+@article{CAI2026122819,
+title = {Semantic-aware adaptive traffic flow prediction driven by real-time trajectories},
+journal = {Information Sciences},
+volume = {728},
+pages = {122819},
+year = {2026},
+issn = {0020-0255},
+doi = {https://doi.org/10.1016/j.ins.2025.122819},
+author = {Shijie Cai and Jie Hu and Min Wei and Xiao Zhang}
+}
+
 
